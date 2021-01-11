@@ -34,9 +34,9 @@ class Table:
 
         # if name, columns_names and column types are not none
         elif (name is not None) and (column_names is not None) and (column_types is not None):
-
+            self.command_history=[]
             self._name = name
-
+            self.default_maxN=20
             if len(column_names)!=len(column_types):
                 raise ValueError('Need same number of column names and types.')
 
@@ -88,6 +88,7 @@ class Table:
             self.data[i][column_idx] = cast_type(self.data[i][column_idx])
         # change the type of the column
         self.column_types[column_idx] = cast_type
+        self.command_h("CAST COLUMN "+str(column_name))
         self._update()
 
 
@@ -115,7 +116,24 @@ class Table:
             self.data[insert_stack[-1]] = row
         else: # else append to the end
             self.data.append(row)
+        self.command_h("INSERT INTO "+str(self._name)+" VALUES "+str(row))
         self._update()
+
+    def _ret_backupvalue(self,set_value, set_column, condition):
+        column_name, operator, value = self._parse_condition(condition)
+
+        # get the condition and the set column
+        column = self.columns[self.column_names.index(column_name)]
+        set_column_idx = self.column_names.index(set_column)
+
+        # set_columns_indx = [self.column_names.index(set_column_name) for set_column_name in set_column_names]
+
+        # for each value in column, if condition, replace it with set_value
+        changes=[]
+        for row_ind, column_value in enumerate(column):
+            if get_op(operator, column_value, value):
+                changes.append(self.data[row_ind][set_column_idx])
+        return changes
 
     def _update_row(self, set_value, set_column, condition):
         '''
@@ -135,6 +153,7 @@ class Table:
             if get_op(operator, column_value, value):
                 self.data[row_ind][set_column_idx] = set_value
 
+        self.command_h("UPDATE "+str(self._name)+" SET "+str(set_column)+"=="+str(set_value)+" WHERE "+str(condition))
         self._update()
                 # print(f"Updated {len(indexes_to_del)} rows")
 
@@ -168,6 +187,7 @@ class Table:
         self._update()
         print(f"Deleted {len(indexes_to_del)} rows")
         # we have to return the deleted indexes, since they will be appended to the insert_stack
+        self.command_h("DELETE FROM "+str(self._name)+" WHERE "+str(condtion))
         return indexes_to_del
 
 
@@ -192,6 +212,12 @@ class Table:
             rows = [ind for ind, x in enumerate(column) if get_op(operator, x, value)]
         else:
             rows = [i for i in range(len(self.columns[0]))]
+        commad="SELECT "+str(return_columns)
+        if condition is not None:
+            commad+=" WHERE "+str(condition)
+
+
+        self.command_h(commad)
 
         # top k rows
         rows = rows[:top_k]
@@ -219,6 +245,7 @@ class Table:
         else:
             return_cols = [self.column_names.index(colname) for colname in return_columns]
 
+        self.command_h("SELECT "+str(return_columns)+"WHERE "+str(condition))
 
         column_name, operator, value = self._parse_condition(condition)
 
@@ -227,6 +254,7 @@ class Table:
         # if the column in condition is not a primary key, abort the select
         if column_name != self.column_names[self.pk_idx]:
             print('Column is not PK. Aborting')
+
 
         # here we run the same select twice, sequentially and using the btree.
         # we then check the results match and compare performance (number of operation)
@@ -282,6 +310,7 @@ class Table:
         column = self.columns[self.column_names.index(column_name)]
         idx = sorted(range(len(column)), key=lambda k: column[k], reverse=not asc)
         # print(idx)
+        self.command_h("SORT "+str(self._name)+" ORDER BY "+str(column_name))
         self.data = [self.data[i] for i in idx]
         self._update()
 
@@ -292,6 +321,8 @@ class Table:
         '''
         # get columns and operator
         column_name_left, operator, column_name_right = self._parse_condition(condition, both_columns=True)
+
+        self.command_h("inner_join")
         # try to find both columns, if you fail raise error
         try:
             column_index_left = self.column_names.index(column_name_left)
@@ -339,6 +370,8 @@ class Table:
         else:
             print(f"\n## {self._name} ##")
 
+        self.command_h("SHOW "+str(self._name))
+
         # headers -> "column name (column type)"
         headers = [f'{col} ({tp.__name__})' for col, tp in zip(self.column_names, self.column_types)]
         if self.pk_idx is not None:
@@ -377,3 +410,28 @@ class Table:
         f.close()
 
         self.__dict__.update(tmp_dict)
+
+
+    def _change_maxN(self,N):
+        self.default_maxN=N
+
+
+    def command_h(self,comm):
+        # print(self._name.backup)
+        if(len(self.command_history)>self.default_maxN):
+                self.command_history.pop(0)
+                new_dict={}
+                # if os.path.getsize(f'{self.savedir}/{table_name}_backup.txt') > 0:
+                if(self._name[:4]!='meta'):
+                    with open(f'dbdata/vsmdb_db/{self._name}_backup.txt', 'rb') as u:
+                            dict=pickle.load(u)
+                            u.close()
+                    for x in (dict):
+                        if(int(x)>1):
+                            new_dict.update({str(int(x)-1):dict[x]})
+                    with open(f'dbdata/vsmdb_db//{self._name}_backup.txt', 'wb') as f:
+                            pickle.dump(new_dict, f)
+                            f.close()
+
+                # self
+        self.command_history.append(comm)

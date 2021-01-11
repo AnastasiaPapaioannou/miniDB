@@ -15,7 +15,6 @@ class Database:
     def __init__(self, name, load=True):
         self.tables = {}
         self._name = name
-
         self.savedir = f'dbdata/{name}_db'
 
         if load:
@@ -222,6 +221,8 @@ class Database:
         row -> a list of the values that are going to be inserted (will be automatically casted to predifined type)
         lock_load_save -> If false, user need to load, lock and save the states of the database (CAUTION). Usefull for bulk loading
         '''
+
+
         if lock_load_save:
             self.load(self.savedir)
             if self.is_locked(table_name):
@@ -243,7 +244,7 @@ class Database:
             self.save()
 
 
-    def update(self, table_name, set_value, set_column, condition):
+    def update(self, table_name, set_value, set_column, condition,int_use=True):
         '''
         Update the value of a column where condition is met.
 
@@ -253,10 +254,30 @@ class Database:
         condition -> a condition using the following format :
                     'column[<,<=,==,>=,>]value' or
                     'value[<,<=,==,>=,>]column'.
+        int_use  -> internal use where doesn;t need bacc up for roll_back
 
                     operatores supported -> (<,<=,==,>=,>)
         '''
         self.load(self.savedir)
+        # Load the columns that will be changed
+        new_dict={}
+        if((int_use)):
+            changes=self.tables[table_name]._ret_backupvalue(table_name,set_column,condition)
+
+            if os.path.getsize(f'{self.savedir}/{table_name}_backup.txt') > 0:
+                with open(f'{self.savedir}/{table_name}_backup.txt', 'rb') as u:
+                    new_dict=pickle.load(u)
+                    u.close()
+        #       Save the current form of the table
+            with open(f'{self.savedir}/{table_name}_backup.txt', 'wb') as f:
+                    new_dict.update({str(len(self.tables[table_name].command_history)):[table_name, changes, set_column, condition]})
+                    pickle.dump(new_dict, f)
+                    f.close()
+            # print(self.backup)
+        # tbl=str((self.select(table_name,[set_column],condition,None,None,False,None,True)).show())
+
+
+
         if self.is_locked(table_name):
             return
         self.lockX_table(table_name)
@@ -264,6 +285,8 @@ class Database:
         self.unlock_table(table_name)
         self._update()
         self.save()
+
+
 
     def delete(self, table_name, condition):
         '''
@@ -581,3 +604,30 @@ class Database:
         index = pickle.load(f)
         f.close()
         return index
+
+    # Change max N in rollback method
+    def change_maxN(self,N,table_name):
+        self.tables[table_name]._change_maxN(N)
+
+
+    def rollback(self,num,table_name):
+        if(num>len(self.tables[table_name].command_history)):
+            print("Too big number")
+        else:
+            with open(f'{self.savedir}/{table_name}_backup.txt', 'rb') as f:
+                new_dict=pickle.load(f)
+
+                limit=len(self.tables[table_name].command_history)-num
+                for x in reversed(new_dict):
+                    if(int(x)>=limit):
+                        table=new_dict[x][0]
+                        changes=new_dict[x][1]
+                        column=new_dict[x][2]
+                        condition=new_dict[x][3]
+                        for change in changes:
+                            self.update(table,change,column,condition,False)
+                # Recalculate meta tables
+                self._update()
+                print("Command: ",self.tables[table_name].command_history[limit-1])
+                # print(self.tables[table_name].command_history)
+            self.tables[table_name].command_history=[]
